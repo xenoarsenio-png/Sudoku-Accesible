@@ -1,0 +1,1098 @@
+app/
+├── build.gradle.kts
+└── src/
+    └── main/
+        ├── AndroidManifest.xml
+        └── java/
+            └── com/
+                example/
+                └── sudokuaccesible/
+                    ├── MainActivity.kt
+                    ├── ui/
+                    │   ├── theme/
+                    │   │   ├── Color.kt
+                    │   │   ├── Theme.kt
+                    │   │   └── Type.kt
+                    │   ├── screens/
+                    │   │   ├── WelcomeScreen.kt
+                    │   │   ├── LevelSelectScreen.kt
+                    │   │   └── GameScreen.kt
+                    │   └── components/
+                    │       ├── AccessibilityControls.kt
+                    │       ├── TopBar.kt
+                    │       ├── BoardView.kt
+                    │       ├── VictoryModal.kt
+                    │       └── LoadGameModal.kt
+                    ├── model/
+                    │   ├── Difficulty.kt
+                    │   └── GameState.kt
+                    └── viewmodel/
+                        └── SudokuViewModel.kt
+app/build.gradle.kts
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+}
+
+android {
+    namespace = "com.example.sudokuaccesible"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.example.sudokuaccesible"
+        minSdk = 24
+        targetSdk = 35
+        versionCode = 1
+        versionName = "1.0"
+    }
+
+    buildFeatures {
+        compose = true
+    }
+}
+
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.activity.compose)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+}
+ui/theme/Color.kt
+package com.example.sudokuaccesible.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+// Normal Mode Colors
+val MossGreen = Color(0xFF2E5A44)
+val DarkNavy = Color(0xFF0A2540)
+val CrimsonDark = Color(0xFF7A1C1C)
+val TurquoiseGreen = Color(0xFF00A896)
+val AmberYellow = Color(0xFFFFB703)
+val WoodenTableBackground = Color(0xFF3E2723)
+val BoardLight = Color(0xFFFFFFFF)
+val TextDark = Color(0xFF000000)
+
+// High Contrast Mode Colors
+val HighContrastBackground = Color(0xFF000000)
+val BoardDark = Color(0xFF121212)
+val TextLight = Color(0xFFFFFFFF)
+val ElectricBlue = Color(0xFF1D70B8)
+val NeonRed = Color(0xFFD62828)
+val NeonLime = Color(0xFF39FF14)
+val ElectricCyan = Color(0xFF00D4FF)
+val ElectricGold = Color(0xFFFFD700)
+model/Difficulty.kt
+package com.example.sudokuaccesible.model
+
+enum class Difficulty {
+    FACIL,
+    INTERMEDIO,
+    DIFICIL
+}
+model/GameState.kt
+package com.example.sudokuaccesible.model
+
+data class Cell(
+    val row: Int,
+    val col: Int,
+    var value: Int = 0,
+    val isInitial: Boolean = false,
+    var isError: Boolean = false,
+    var isLocked: Boolean = false
+)
+
+data class GameState(
+    val difficulty: Difficulty = Difficulty.FACIL,
+    val board: List<List<Cell>> = List(9) { r -> List(9) { c -> Cell(r, c) } },
+    val secondsElapsed: Long = 0L,
+    val credits: Double = 0.0,
+    val completedBlocks: Int = 0,
+    val isHighContrast: Boolean = false,
+    val isAudioEnabled: Boolean = true,
+    val isGameOver: Boolean = false,
+    val selectedRow: Int? = null,
+    val selectedCol: Int? = null
+)
+viewmodel/SudokuViewModel.kt
+package com.example.sudokuaccesible.viewmodel
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.sudokuaccesible.model.Cell
+import com.example.sudokuaccesible.model.Difficulty
+import com.example.sudokuaccesible.model.GameState
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+class SudokuViewModel : ViewModel() {
+
+    private val _uiState = MutableStateFlow(GameState())
+    val uiState: StateFlow<GameState> = _uiState.asStateFlow()
+
+    private var timerJob: Job? = null
+    private val savedGames = mutableMapOf<Difficulty, GameState>()
+
+    fun toggleHighContrast() {
+        _uiState.update { it.copy(isHighContrast = !it.isHighContrast) }
+    }
+
+    fun toggleAudio() {
+        _uiState.update { it.copy(isAudioEnabled = !it.isAudioEnabled) }
+    }
+
+    fun hasSavedGame(difficulty: Difficulty): Boolean {
+        return savedGames.containsKey(difficulty)
+    }
+
+    fun selectDifficulty(difficulty: Difficulty, loadSaved: Boolean = false) {
+        if (loadSaved && savedGames.containsKey(difficulty)) {
+            _uiState.value = savedGames[difficulty]!!
+        } else {
+            val newBoard = generatePuzzle(difficulty)
+            _uiState.update {
+                it.copy(
+                    difficulty = difficulty,
+                    board = newBoard,
+                    secondsElapsed = 0L,
+                    credits = 0.0,
+                    completedBlocks = 0,
+                    isGameOver = false,
+                    selectedRow = null,
+                    selectedCol = null
+                )
+            }
+        }
+        startTimer()
+    }
+
+    fun pauseGame() {
+        timerJob?.cancel()
+        savedGames[_uiState.value.difficulty] = _uiState.value
+    }
+
+    private fun startTimer() {
+        timerJob?.cancel()
+        timerJob = viewModelScope.launch {
+            while (true) {
+                delay(1000L)
+                _uiState.update { it.copy(secondsElapsed = it.secondsElapsed + 1) }
+            }
+        }
+    }
+
+    fun selectCell(row: Int, col: Int) {
+        _uiState.update { it.copy(selectedRow = row, selectedCol = col) }
+    }
+
+    fun enterNumber(number: Int) {
+        val state = _uiState.value
+        val r = state.selectedRow ?: return
+        val c = state.selectedCol ?: return
+        val currentCell = state.board[r][c]
+
+        if (currentCell.isInitial || currentCell.isLocked) return
+
+        val newBoard = state.board.map { row -> row.map { cell -> cell.copy() } }
+        val isError = !isValidPlacement(newBoard, r, c, number)
+        newBoard[r][c].value = number
+        newBoard[r][c].isError = isError
+
+        _uiState.update { it.copy(board = newBoard) }
+
+        checkBlockCompletions(newBoard)
+        if (isBoardComplete(newBoard)) {
+            timerJob?.cancel()
+            savedGames.remove(state.difficulty)
+            _uiState.update { it.copy(isGameOver = true) }
+        }
+    }
+
+    fun useHint() {
+        val state = _uiState.value
+        if (state.credits < 1.0) return
+        val r = state.selectedRow ?: return
+        val c = state.selectedCol ?: return
+        val currentCell = state.board[r][c]
+
+        if (currentCell.isInitial || currentCell.value != 0) return
+
+        val solvedValue = getSolvedValue(r, c)
+        val newBoard = state.board.map { row -> row.map { cell -> cell.copy() } }
+        newBoard[r][c].value = solvedValue
+        newBoard[r][c].isError = false
+        newBoard[r][c].isLocked = true
+
+        _uiState.update {
+            it.copy(
+                board = newBoard,
+                credits = it.credits - 1.0
+            )
+        }
+    }
+
+    private fun checkBlockCompletions(board: List<List<Cell>>) {
+        var completedCount = 0
+        for (blockRow in 0..2) {
+            for (blockCol in 0..2) {
+                if (isBlockComplete(board, blockRow, blockCol)) {
+                    completedCount++
+                }
+            }
+        }
+        val previousCount = _uiState.value.completedBlocks
+        if (completedCount > previousCount) {
+            val newlyCompleted = completedCount - previousCount
+            val earnedCredits = newlyCompleted * 0.25
+            _uiState.update {
+                it.copy(
+                    completedBlocks = completedCount,
+                    credits = it.credits + earnedCredits
+                )
+            }
+        }
+    }
+
+    private fun isBlockComplete(board: List<List<Cell>>, blockRow: Int, blockCol: Int): Boolean {
+        val values = mutableListOf<Int>()
+        for (r in 0..2) {
+            for (c in 0..2) {
+                val cell = board[blockRow * 3 + r][blockCol * 3 + c]
+                if (cell.value == 0 || cell.isError) return false
+                values.add(cell.value)
+            }
+        }
+        return values.toSet().size == 9
+    }
+
+    private fun isBoardComplete(board: List<List<Cell>>): Boolean {
+        return board.all { row -> row.all { cell -> cell.value != 0 && !cell.isError } }
+    }
+
+    private fun isValidPlacement(board: List<List<Cell>>, row: Int, col: Int, value: Int): Boolean {
+        for (i in 0..8) {
+            if (i != col && board[row][i].value == value) return false
+            if (i != row && board[i][col].value == value) return false
+        }
+        val startRow = (row / 3) * 3
+        val startCol = (col / 3) * 3
+        for (r in startRow until startRow + 3) {
+            for (c in startCol until startCol + 3) {
+                if ((r != row || c != col) && board[r][c].value == value) return false
+            }
+        }
+        return true
+    }
+
+    private fun getSolvedValue(row: Int, col: Int): Int {
+        return ((row * 3 + row / 3 + col) % 9) + 1
+    }
+
+    private fun generatePuzzle(difficulty: Difficulty): List<List<Cell>> {
+        val board = List(9) { r ->
+            List(9) { c ->
+                val solvedVal = getSolvedValue(r, c)
+                Cell(r, c, value = solvedVal, isInitial = true)
+            }
+        }
+        val removeCount = when (difficulty) {
+            Difficulty.FACIL -> 30
+            Difficulty.INTERMEDIO -> 45
+            Difficulty.DIFICIL -> 55
+        }
+        val mutableBoard = board.map { row -> row.map { cell -> cell.copy() }.toMutableList() }
+        var removed = 0
+        while (removed < removeCount) {
+            val r = (0..8).random()
+            val c = (0..8).random()
+            if (mutableBoard[r][c].value != 0) {
+                mutableBoard[r][c].value = 0
+                mutableBoard[r][c] = mutableBoard[r][c].copy(isInitial = false)
+                removed++
+            }
+        }
+        return mutableBoard
+    }
+}
+ui/components/AccessibilityControls.kt
+package com.example.sudokuaccesible.ui.components
+
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+
+@Composable
+fun AccessibilityControls(
+    isHighContrast: Boolean,
+    isAudioEnabled: Boolean,
+    onToggleContrast: () -> Unit,
+    onToggleAudio: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(modifier = modifier) {
+        IconButton(
+            onClick = onToggleContrast,
+            modifier = Modifier.semantics {
+                contentDescription = if (isHighContrast) "Desactivar alto contraste" else "Activar alto contraste"
+            }
+        ) {
+            Icon(
+                painter = painterResource(id = android.R.drawable.ic_menu_compass),
+                contentDescription = null,
+                tint = if (isHighContrast) Color.White else Color.Black
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        IconButton(
+            onClick = onToggleAudio,
+            modifier = Modifier.semantics {
+                contentDescription = if (isAudioEnabled) "Silenciar audio" else "Activar audio"
+            }
+        ) {
+            Icon(
+                painter = painterResource(id = if (isAudioEnabled) android.R.drawable.ic_lock_silent_mode_off else android.R.drawable.ic_lock_silent_mode),
+                contentDescription = null,
+                tint = if (isHighContrast) Color.White else Color.Black
+            )
+        }
+    }
+}
+ui/components/TopBar.kt
+package com.example.sudokuaccesible.ui.components
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.sudokuaccesible.ui.theme.AmberYellow
+import com.example.sudokuaccesible.ui.theme.TurquoiseGreen
+
+@Composable
+fun TopBar(
+    secondsElapsed: Long,
+    credits: Double,
+    onBackClick: () -> Unit,
+    onHintClick: () -> Unit,
+    isHighContrast: Boolean
+) {
+    val hours = secondsElapsed / 3600
+    val minutes = (secondsElapsed % 3600) / 60
+    val seconds = secondsElapsed % 60
+    val formattedTime = String.format("%02d:%02d:%02d", hours, minutes, seconds)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Button(
+            onClick = onBackClick,
+            colors = ButtonDefaults.buttonColors(containerColor = TurquoiseGreen),
+            modifier = Modifier.semantics { contentDescription = "Volver al menú principal" }
+        ) {
+            Text("← Volver", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+
+        Text(
+            text = "⏱️ $formattedTime",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (isHighContrast) Color.White else Color.Black,
+            modifier = Modifier.semantics {
+                contentDescription = "Tiempo transcurrido: $hours horas, $minutes minutos y $seconds segundos"
+            }
+        )
+
+        IconButton(
+            onClick = onHintClick,
+            modifier = Modifier.semantics {
+                contentDescription = "Pedir pista. Créditos disponibles: $credits. Cuesta 1 crédito."
+            }
+        ) {
+            Icon(
+                painter = painterResource(id = android.R.drawable.btn_star),
+                contentDescription = null,
+                tint = if (credits >= 1.0) AmberYellow else Color.Gray
+            )
+        }
+    }
+}
+ui/components/BoardView.kt
+package com.example.sudokuaccesible.ui.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.sudokuaccesible.model.Cell
+import com.example.sudokuaccesible.ui.theme.BoardDark
+import com.example.sudokuaccesible.ui.theme.BoardLight
+import com.example.sudokuaccesible.ui.theme.CrimsonDark
+
+@Composable
+fun BoardView(
+    board: List<List<Cell>>,
+    selectedRow: Int?,
+    selectedCol: Int?,
+    isHighContrast: Boolean,
+    onCellSelected: (Int, Int) -> Unit
+) {
+    val backgroundColor = if (isHighContrast) BoardDark else BoardLight
+    val gridColor = if (isHighContrast) Color.White else Color.Black
+    val textColor = if (isHighContrast) Color.White else Color.Black
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp)
+            .background(backgroundColor)
+            .border(2.dp, gridColor)
+    ) {
+        for (r in 0..8) {
+            Row(modifier = Modifier.fillMaxWidth()) {
+                for (c in 0..8) {
+                    val cell = board[r][c]
+                    val isSelected = (r == selectedRow && c == selectedCol)
+
+                    val cellBg = when {
+                        isSelected -> Color.Yellow.copy(alpha = 0.4f)
+                        cell.isError -> CrimsonDark.copy(alpha = 0.3f)
+                        else -> backgroundColor
+                    }
+
+                    val cellBorderWidth = when {
+                        (r + 1) % 3 == 0 && (c + 1) % 3 == 0 -> 2.dp
+                        else -> 0.5.dp
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .aspectRatio(1f)
+                            .background(cellBg)
+                            .border(cellBorderWidth, gridColor)
+                            .clickable { onCellSelected(r, c) }
+                            .semantics {
+                                contentDescription = "Fila ${r + 1}, Columna ${c + 1}. " +
+                                        if (cell.value != 0) "Valor ${cell.value}" else "Vacía" +
+                                        if (cell.isInitial) ", Fija" else "" +
+                                        if (cell.isError) ", Error" else ""
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (cell.value != 0) {
+                            Text(
+                                text = cell.value.toString(),
+                                fontSize = 20.sp,
+                                fontWeight = if (cell.isInitial || cell.isLocked) FontWeight.Bold else FontWeight.Normal,
+                                color = if (cell.isError) CrimsonDark else textColor
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+ui/components/VictoryModal.kt
+package com.example.sudokuaccesible.ui.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.sudokuaccesible.model.Difficulty
+import com.example.sudokuaccesible.ui.theme.DarkNavy
+import com.example.sudokuaccesible.ui.theme.ElectricBlue
+import com.example.sudokuaccesible.ui.theme.ElectricCyan
+import com.example.sudokuaccesible.ui.theme.ElectricGold
+import com.example.sudokuaccesible.ui.theme.MossGreen
+import com.example.sudokuaccesible.ui.theme.NeonLime
+import com.example.sudokuaccesible.ui.theme.TurquoiseGreen
+
+@Composable
+fun VictoryModal(
+    difficulty: Difficulty,
+    secondsElapsed: Long,
+    isHighContrast: Boolean,
+    onTryAgain: () -> Unit,
+    onNextLevelOrMenu: () -> Unit
+) {
+    val titleColor = when (difficulty) {
+        Difficulty.FACIL -> if (isHighContrast) NeonLime else MossGreen
+        Difficulty.INTERMEDIO -> if (isHighContrast) ElectricCyan else DarkNavy
+        Difficulty.DIFICIL -> if (isHighContrast) ElectricGold else ElectricGold
+    }
+
+    val messageText = when (difficulty) {
+        Difficulty.FACIL -> "¡Felicitaciones! Lograste superar este nivel. Inténtalo en el siguiente nivel."
+        Difficulty.INTERMEDIO -> "¡Wow, impresionante! Este estaba más difícil. Continúa al siguiente reto."
+        Difficulty.DIFICIL -> "¡Eres un crack absoluto! Superaste mis expectativas y demostraste una mente brillante. ¡Misión cumplida, leyenda!"
+    }
+
+    val secondaryBtnText = if (difficulty == Difficulty.DIFICIL) "Volver a Selección de Nivel" else "Siguiente Nivel"
+
+    val hours = secondsElapsed / 3600
+    val minutes = (secondsElapsed % 3600) / 60
+    val seconds = secondsElapsed % 60
+
+    AlertDialog(
+        onDismissRequest = {},
+        containerColor = if (isHighContrast) Color.Black else Color.White,
+        title = {
+            Text(
+                text = "¡Nivel Completado!",
+                color = titleColor,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = messageText,
+                    color = if (isHighContrast) Color.White else Color.Black,
+                    fontSize = 16.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Tiempo total: ${hours}h ${minutes}m ${seconds}s",
+                    color = if (isHighContrast) Color.LightGray else Color.DarkGray,
+                    fontSize = 14.sp
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onNextLevelOrMenu,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isHighContrast) ElectricBlue else DarkNavy
+                )
+            ) {
+                Text(secondaryBtnText, color = Color.White)
+            }
+        },
+        dismissButton = {
+            Button(
+                onClick = onTryAgain,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = TurquoiseGreen
+                )
+            ) {
+                Text("Intentar otra vez", color = Color.White)
+            }
+        }
+    )
+}
+ui/components/LoadGameModal.kt
+package com.example.sudokuaccesible.ui.components
+
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import com.example.sudokuaccesible.ui.theme.CrimsonDark
+import com.example.sudokuaccesible.ui.theme.DarkNavy
+import com.example.sudokuaccesible.ui.theme.ElectricBlue
+import com.example.sudokuaccesible.ui.theme.NeonRed
+
+@Composable
+fun LoadGameModal(
+    isHighContrast: Boolean,
+    onContinue: () -> Unit,
+    onNewGame: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = if (isHighContrast) Color.Black else Color.White,
+        title = {
+            Text(
+                text = "Partida Guardada Detectada",
+                color = if (isHighContrast) Color.White else Color.Black,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Text(
+                text = "¿Deseas continuar tu partida anterior o iniciar una nueva?",
+                color = if (isHighContrast) Color.White else Color.Black
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onContinue,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isHighContrast) ElectricBlue else DarkNavy
+                )
+            ) {
+                Text("Continuar partida guardada", color = Color.White)
+            }
+        },
+        dismissButton = {
+            Button(
+                onClick = onNewGame,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isHighContrast) NeonRed else CrimsonDark
+                )
+            ) {
+                Text("Iniciar partida nueva", color = Color.White)
+            }
+        }
+    )
+}
+ui/screens/WelcomeScreen.kt
+package com.example.sudokuaccesible.ui.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.sudokuaccesible.ui.theme.MossGreen
+import com.example.sudokuaccesible.ui.theme.WoodenTableBackground
+
+@Composable
+fun WelcomeScreen(
+    onContinueClick: () -> Unit,
+    isHighContrast: Boolean
+) {
+    val bg = if (isHighContrast) Color.Black else WoodenTableBackground
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(bg)
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "Sudoku Accesible",
+            fontSize = 32.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "Diseñado para todos. Menú natural y tablero elegante.",
+            fontSize = 16.sp,
+            color = Color.LightGray
+        )
+        Spacer(modifier = Modifier.height(48.dp))
+        Button(
+            onClick = onContinueClick,
+            colors = ButtonDefaults.buttonColors(containerColor = MossGreen),
+            modifier = Modifier.semantics { contentDescription = "Continuar al menú de selección de nivel" }
+        ) {
+            Text("Continuar", fontSize = 20.sp, color = Color.White, modifier = Modifier.padding(8.dp))
+        }
+    }
+}
+ui/screens/LevelSelectScreen.kt
+package com.example.sudokuaccesible.ui.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.sudokuaccesible.model.Difficulty
+import com.example.sudokuaccesible.ui.components.AccessibilityControls
+import com.example.sudokuaccesible.ui.theme.CrimsonDark
+import com.example.sudokuaccesible.ui.theme.DarkNavy
+import com.example.sudokuaccesible.ui.theme.MossGreen
+import com.example.sudokuaccesible.ui.theme.WoodenTableBackground
+
+@Composable
+fun LevelSelectScreen(
+    isHighContrast: Boolean,
+    isAudioEnabled: Boolean,
+    onDifficultySelect: (Difficulty) -> Unit,
+    onToggleContrast: () -> Unit,
+    onToggleAudio: () -> Unit
+) {
+    val bg = if (isHighContrast) Color.Black else WoodenTableBackground
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(bg)
+            .padding(24.dp)
+    ) {
+        Column(
+            modifier = Modifier.align(Alignment.Center),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = "Selecciona el Nivel",
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Button(
+                onClick = { onDifficultySelect(Difficulty.FACIL) },
+                colors = ButtonDefaults.buttonColors(containerColor = MossGreen),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Nivel Fácil" }
+            ) {
+                Text("Fácil", fontSize = 20.sp, color = Color.White, modifier = Modifier.padding(8.dp))
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = { onDifficultySelect(Difficulty.INTERMEDIO) },
+                colors = ButtonDefaults.buttonColors(containerColor = DarkNavy),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Nivel Intermedio" }
+            ) {
+                Text("Intermedio", fontSize = 20.sp, color = Color.White, modifier = Modifier.padding(8.dp))
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = { onDifficultySelect(Difficulty.DIFICIL) },
+                colors = ButtonDefaults.buttonColors(containerColor = CrimsonDark),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Nivel Difícil" }
+            ) {
+                Text("Difícil", fontSize = 20.sp, color = Color.White, modifier = Modifier.padding(8.dp))
+            }
+        }
+
+        AccessibilityControls(
+            isHighContrast = isHighContrast,
+            isAudioEnabled = isAudioEnabled,
+            onToggleContrast = onToggleContrast,
+            onToggleAudio = onToggleAudio,
+            modifier = Modifier.align(Alignment.BottomEnd)
+        )
+    }
+}
+ui/screens/GameScreen.kt
+package com.example.sudokuaccesible.ui.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.sudokuaccesible.model.Difficulty
+import com.example.sudokuaccesible.model.GameState
+import com.example.sudokuaccesible.ui.components.AccessibilityControls
+import com.example.sudokuaccesible.ui.components.BoardView
+import com.example.sudokuaccesible.ui.components.TopBar
+import com.example.sudokuaccesible.ui.components.VictoryModal
+import com.example.sudokuaccesible.ui.theme.DarkNavy
+import com.example.sudokuaccesible.ui.theme.WoodenTableBackground
+
+@Composable
+fun GameScreen(
+    state: GameState,
+    onBackClick: () -> Unit,
+    onHintClick: () -> Unit,
+    onCellSelected: (Int, Int) -> Unit,
+    onNumberInput: (Int) -> Unit,
+    onToggleContrast: () -> Unit,
+    onToggleAudio: () -> Unit,
+    onTryAgain: () -> Unit,
+    onNextLevelOrMenu: () -> Unit
+) {
+    val bg = if (state.isHighContrast) Color.Black else WoodenTableBackground
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(bg)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            TopBar(
+                secondsElapsed = state.secondsElapsed,
+                credits = state.credits,
+                onBackClick = onBackClick,
+                onHintClick = onHintClick,
+                isHighContrast = state.isHighContrast
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            BoardView(
+                board = state.board,
+                selectedRow = state.selectedRow,
+                selectedCol = state.selectedCol,
+                isHighContrast = state.isHighContrast,
+                onCellSelected = onCellSelected
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                for (num in 1..9) {
+                    Button(
+                        onClick = { onNumberInput(num) },
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkNavy),
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(2.dp)
+                            .semantics { contentDescription = "Ingresar número $num" }
+                    ) {
+                        Text(num.toString(), color = Color.White, fontSize = 16.sp)
+                    }
+                }
+            }
+        }
+
+        AccessibilityControls(
+            isHighContrast = state.isHighContrast,
+            isAudioEnabled = state.isAudioEnabled,
+            onToggleContrast = onToggleContrast,
+            onToggleAudio = onToggleAudio,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp)
+        )
+
+        if (state.isGameOver) {
+            VictoryModal(
+                difficulty = state.difficulty,
+                secondsElapsed = state.secondsElapsed,
+                isHighContrast = state.isHighContrast,
+                onTryAgain = onTryAgain,
+                onNextLevelOrMenu = onNextLevelOrMenu
+            )
+        }
+    }
+}
+MainActivity.kt
+package com.example.sudokuaccesible
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.viewModels
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.example.sudokuaccesible.model.Difficulty
+import com.example.sudokuaccesible.ui.components.LoadGameModal
+import com.example.sudokuaccesible.ui.screens.GameScreen
+import com.example.sudokuaccesible.ui.screens.LevelSelectScreen
+import com.example.sudokuaccesible.ui.screens.WelcomeScreen
+import com.example.sudokuaccesible.viewmodel.SudokuViewModel
+
+enum class Screen {
+    WELCOME,
+    LEVEL_SELECT,
+    GAME
+}
+
+class MainActivity : ComponentActivity() {
+
+    private val viewModel: SudokuViewModel by viewModels()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            SudokuApp(viewModel)
+        }
+    }
+}
+
+@Composable
+fun SudokuApp(viewModel: SudokuViewModel) {
+    val state by viewModel.uiState.collectAsState()
+    var currentScreen by remember { mutableStateOf(Screen.WELCOME) }
+    var pendingDifficulty by remember { mutableStateOf<Difficulty?>(null) }
+    var showLoadModal by remember { mutableStateOf(false) }
+
+    when (currentScreen) {
+        Screen.WELCOME -> {
+            WelcomeScreen(
+                onContinueClick = { currentScreen = Screen.LEVEL_SELECT },
+                isHighContrast = state.isHighContrast
+            )
+        }
+        Screen.LEVEL_SELECT -> {
+            LevelSelectScreen(
+                isHighContrast = state.isHighContrast,
+                isAudioEnabled = state.isAudioEnabled,
+                onDifficultySelect = { diff ->
+                    if (viewModel.hasSavedGame(diff)) {
+                        pendingDifficulty = diff
+                        showLoadModal = true
+                    } else {
+                        viewModel.selectDifficulty(diff, loadSaved = false)
+                        currentScreen = Screen.GAME
+                    }
+                },
+                onToggleContrast = { viewModel.toggleHighContrast() },
+                onToggleAudio = { viewModel.toggleAudio() }
+            )
+
+            if (showLoadModal && pendingDifficulty != null) {
+                LoadGameModal(
+                    isHighContrast = state.isHighContrast,
+                    onContinue = {
+                        viewModel.selectDifficulty(pendingDifficulty!!, loadSaved = true)
+                        showLoadModal = false
+                        currentScreen = Screen.GAME
+                    },
+                    onNewGame = {
+                        viewModel.selectDifficulty(pendingDifficulty!!, loadSaved = false)
+                        showLoadModal = false
+                        currentScreen = Screen.GAME
+                    },
+                    onDismiss = { showLoadModal = false }
+                )
+            }
+        }
+        Screen.GAME -> {
+            GameScreen(
+                state = state,
+                onBackClick = {
+                    viewModel.pauseGame()
+                    currentScreen = Screen.LEVEL_SELECT
+                },
+                onHintClick = { viewModel.useHint() },
+                onCellSelected = { r, c -> viewModel.selectCell(r, c) },
+                onNumberInput = { num -> viewModel.enterNumber(num) },
+                onToggleContrast = { viewModel.toggleHighContrast() },
+                onToggleAudio = { viewModel.toggleAudio() },
+                onTryAgain = {
+                    viewModel.selectDifficulty(state.difficulty, loadSaved = false)
+                },
+                onNextLevelOrMenu = {
+                    when (state.difficulty) {
+                        Difficulty.FACIL -> viewModel.selectDifficulty(Difficulty.INTERMEDIO, loadSaved = false)
+                        Difficulty.INTERMEDIO -> viewModel.selectDifficulty(Difficulty.DIFICIL, loadSaved = false)
+                        Difficulty.DIFICIL -> currentScreen = Screen.LEVEL_SELECT
+                      
